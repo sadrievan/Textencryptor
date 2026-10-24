@@ -42,7 +42,9 @@ class MainActivity : ComponentActivity() {
 fun EncryptorScreen() {
     var originalText by remember { mutableStateOf("") }
     var keyText by remember { mutableStateOf("") }
-    var encryptedResult by remember { mutableStateOf("") }
+    var resultText by remember { mutableStateOf("") }
+    var isEncrypted by remember { mutableStateOf(false) } // Флаг: что сейчас в результате
+    
     val context = LocalContext.current
 
     Scaffold(
@@ -59,7 +61,7 @@ fun EncryptorScreen() {
             OutlinedTextField(
                 value = originalText,
                 onValueChange = { originalText = it },
-                label = { Text("Исходная фраза") },
+                label = { Text("Исходная фраза / Шифр") },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 3
             )
@@ -72,23 +74,51 @@ fun EncryptorScreen() {
                 singleLine = true
             )
 
-            Button(
-                onClick = {
-                    if (originalText.isNotBlank() && keyText.isNotBlank()) {
-                        encryptedResult = encryptText(originalText, keyText)
-                    } else {
-                        Toast.makeText(context, "Заполните оба поля", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Зашифровать")
+                Button(
+                    onClick = {
+                        if (originalText.isNotBlank() && keyText.isNotBlank()) {
+                            resultText = encryptText(originalText, keyText)
+                            isEncrypted = true
+                        } else {
+                            Toast.makeText(context, "Заполните оба поля", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Зашифровать")
+                }
+
+                Button(
+                    onClick = {
+                        if (originalText.isNotBlank() && keyText.isNotBlank()) {
+                            val decrypted = decryptText(originalText, keyText)
+                            if (decrypted != null) {
+                                resultText = decrypted
+                                isEncrypted = false
+                            } else {
+                                Toast.makeText(context, "Ошибка дешифровки. Неверный ключ или поврежденные данные.", Toast.LENGTH_LONG).show()
+                            }
+                        } else {
+                            Toast.makeText(context, "Заполните оба поля", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Дешифровать")
+                }
             }
 
-            if (encryptedResult.isNotEmpty()) {
-                Text("Результат (Base64):", fontWeight = FontWeight.Bold)
+            if (resultText.isNotEmpty()) {
+                Text(
+                    text = if (isEncrypted) "Зашифрованный текст (Base64):" else "Расшифрованный текст:",
+                    fontWeight = FontWeight.Bold
+                )
                 OutlinedTextField(
-                    value = encryptedResult,
+                    value = resultText,
                     onValueChange = {},
                     readOnly = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -96,7 +126,7 @@ fun EncryptorScreen() {
                 )
 
                 Button(
-                    onClick = { saveToFile(context, encryptedResult) },
+                    onClick = { saveToFile(context, resultText) },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Сохранить в *.txt")
@@ -106,11 +136,10 @@ fun EncryptorScreen() {
     }
 }
 
-// Простое AES-GCM шифрование
+// --- КРИПТОГРАФИЯ ---
+
 fun encryptText(text: String, password: String): String {
     val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-    // В реальном приложении используйте PBKDF2 для получения ключа из пароля.
-    // Здесь для простоты берем хэш пароля (не для продакшена!).
     val keyBytes = password.toByteArray().copyOf(16) 
     val secretKey = SecretKeySpec(keyBytes, "AES")
     
@@ -123,7 +152,30 @@ fun encryptText(text: String, password: String): String {
     return Base64.getEncoder().encodeToString(combined)
 }
 
-// Сохранение в Downloads через MediaStore
+fun decryptText(encryptedBase64: String, password: String): String? {
+    return try {
+        val combined = Base64.getDecoder().decode(encryptedBase64)
+        // Извлекаем IV (байты с 16 по 28)
+        val iv = combined.copyOfRange(16, 28)
+        // Извлекаем сам шифротекст (все байты после IV)
+        val cipherText = combined.copyOfRange(28, combined.size)
+        
+        val keyBytes = password.toByteArray().copyOf(16)
+        val secretKey = SecretKeySpec(keyBytes, "AES")
+        
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(128, iv))
+        
+        val decrypted = cipher.doFinal(cipherText)
+        String(decrypted)
+    } catch (e: Exception) {
+        // Если ключ неверный или текст поврежден, вернется null
+        null
+    }
+}
+
+// --- СОХРАНЕНИЕ ---
+
 fun saveToFile(context: Context, content: String) {
     val fileName = "encrypted_${System.currentTimeMillis()}.txt"
     val resolver = context.contentResolver
